@@ -1,0 +1,319 @@
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
+
+local player = Players.LocalPlayer
+local character = player.Character or player.CharacterAdded:Wait()
+local rootPart = character:WaitForChild("HumanoidRootPart")
+
+local pullConnection = nil
+local dashVelocity = nil
+local npcList = {}
+local lastNpcUpdate = 0
+
+------------------------------------------------
+-- CHARACTER SETUP
+------------------------------------------------
+
+local function setupCharacter(newChar)
+    character = newChar
+    rootPart = newChar:WaitForChild("HumanoidRootPart")
+    dashVelocity = nil
+
+    rootPart.ChildAdded:Connect(function(child)
+        if child:IsA("BodyVelocity") or child:IsA("LinearVelocity") then
+            dashVelocity = child
+        end
+    end)
+end
+
+if player.Character then
+    setupCharacter(player.Character)
+end
+
+player.CharacterAdded:Connect(setupCharacter)
+
+------------------------------------------------
+-- NPC CACHE
+------------------------------------------------
+
+local function updateNpcCache()
+    npcList = {}
+
+    for _, model in ipairs(Workspace:GetDescendants()) do
+        if model:IsA("Model")
+            and model:FindFirstChild("Humanoid")
+            and model:FindFirstChild("HumanoidRootPart") then
+
+            local root = model.HumanoidRootPart
+
+            if root ~= rootPart then
+                table.insert(npcList, root)
+            end
+        end
+    end
+end
+
+RunService.Heartbeat:Connect(function()
+    if tick() - lastNpcUpdate > 0.5 then
+        lastNpcUpdate = tick()
+        updateNpcCache()
+    end
+end)
+
+------------------------------------------------
+-- CLOSEST TARGET
+------------------------------------------------
+
+local function getClosestTarget()
+    local closestRoot = nil
+    local shortestDistance = math.huge
+    local myPos = rootPart.Position
+
+    -- Players
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= player and plr.Character then
+            local root = plr.Character:FindFirstChild("HumanoidRootPart")
+
+            if root then
+                local dist = (myPos - root.Position).Magnitude
+
+                if dist < shortestDistance and dist > 0.1 then
+                    shortestDistance = dist
+                    closestRoot = root
+                end
+            end
+        end
+    end
+
+    -- NPCs
+    for _, npcRoot in ipairs(npcList) do
+        if npcRoot and npcRoot.Parent then
+            local dist = (myPos - npcRoot.Position).Magnitude
+
+            if dist < shortestDistance and dist > 0.1 then
+                shortestDistance = dist
+                closestRoot = npcRoot
+            end
+        end
+    end
+
+    return closestRoot
+end
+
+------------------------------------------------
+-- MAGNET PULL
+------------------------------------------------
+
+local function startMagnetPull()
+    if pullConnection then
+        pullConnection:Disconnect()
+    end
+
+    local startTime = tick()
+    local pullDuration = 0.15
+    local pullStrength = 50
+    local smoothness = 1
+
+    pullConnection = RunService.Heartbeat:Connect(function()
+        local elapsed = tick() - startTime
+
+        if elapsed >= pullDuration then
+            pullConnection:Disconnect()
+            pullConnection = nil
+            return
+        end
+
+        local targetRoot = getClosestTarget()
+
+        if not targetRoot then
+            return
+        end
+
+        local currentPos = rootPart.Position
+        local targetHorizontal = Vector3.new(
+            targetRoot.Position.X,
+            currentPos.Y,
+            targetRoot.Position.Z
+        )
+
+        local direction = targetHorizontal - currentPos
+        local distance = direction.Magnitude
+
+        if distance > 1 then
+            direction = direction.Unit
+
+            local desiredVel = direction * pullStrength
+            local currentVel = rootPart.AssemblyLinearVelocity
+
+            local newVel = currentVel:Lerp(
+                desiredVel,
+                smoothness
+            )
+
+            rootPart.AssemblyLinearVelocity = Vector3.new(
+                newVel.X * 0.85,
+                currentVel.Y,
+                newVel.Z * 0.85
+            )
+        end
+    end)
+end
+
+------------------------------------------------
+-- TP TO CLOSEST
+------------------------------------------------
+
+local function teleportToClosest()
+    local targetRoot = getClosestTarget()
+
+    if targetRoot and rootPart then
+        local targetPos = targetRoot.Position + Vector3.new(0, 2, 0)
+
+        rootPart.CFrame = CFrame.new(
+            targetPos.X,
+            targetPos.Y,
+            targetPos.Z
+        )
+
+        startMagnetPull()
+    end
+end
+
+------------------------------------------------
+-- GUI & INPUT SETUP
+------------------------------------------------
+
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "ClosestTPGui"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.Parent = game:GetService("CoreGui")
+
+local Button = Instance.new("TextButton")
+Button.Name = "TPButton"
+Button.Size = UDim2.new(0, 170, 0, 50)
+Button.Position = UDim2.new(0.5, -85, 0.8, 0)
+Button.BackgroundTransparency = 0.1
+Button.Text = "sigmamagnettech v2"
+Button.TextSize = 18
+Button.Parent = ScreenGui
+
+-- Xử lý riêng biệt phím RightShift để ẩn/hiện nút mượt mà nhất
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if input.KeyCode == Enum.KeyCode.RightShift then
+        ScreenGui.Enabled = not ScreenGui.Enabled
+        return
+    end
+
+    if gameProcessed then
+        return
+    end
+
+    if input.KeyCode == Enum.KeyCode.E then
+        teleportToClosest()
+
+        if dashVelocity and dashVelocity.Parent then
+            dashVelocity:Destroy()
+            dashVelocity = nil
+        end
+
+        if rootPart then
+            local vel = rootPart.AssemblyLinearVelocity
+
+            rootPart.AssemblyLinearVelocity = Vector3.new(
+                0,
+                vel.Y,
+                0
+            )
+        end
+    end
+end)
+
+------------------------------------------------
+-- HRP COLLIDERS
+------------------------------------------------
+
+task.spawn(function()
+    while task.wait(3) do
+        for _, plr in pairs(Players:GetPlayers()) do
+            if plr ~= player and Workspace:FindFirstChild(plr.Name) then
+
+                local targetCharacter = Workspace[plr.Name]
+
+                if not targetCharacter:FindFirstChild("CHECKER") then
+
+                    local checker = Instance.new("BoolValue")
+                    checker.Name = "CHECKER"
+                    checker.Parent = targetCharacter
+
+                    local torso = targetCharacter:FindFirstChild(
+                        "HumanoidRootPart"
+                    )
+
+                    if torso then
+                        local collider = Instance.new("Part")
+
+                        collider.Name = "TorsoCollider"
+                        collider.Size = torso.Size
+                        collider.CFrame = torso.CFrame
+                        collider.Transparency = 1
+                        collider.CanCollide = true
+                        collider.CanTouch = true
+                        collider.CanQuery = true
+                        collider.Massless = true
+                        collider.Parent = targetCharacter
+
+                        local weld = Instance.new("WeldConstraint")
+
+                        weld.Part0 = torso
+                        weld.Part1 = collider
+                        weld.Parent = collider
+                    end
+                end
+            end
+        end
+    end
+end)
+
+------------------------------------------------
+-- TP BUTTON (Draggable)
+------------------------------------------------
+
+Button.MouseButton1Click:Connect(function()
+    teleportToClosest()
+end)
+
+local dragging, dragInput, dragStart, startPos
+
+Button.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = true
+        dragStart = input.Position
+        startPos = Button.Position
+        
+        input.Changed:Connect(function()
+            if input.UserInputState == Enum.UserInputState.End then
+                dragging = false
+            end
+        end)
+    end
+end)
+
+Button.InputChanged:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+        dragInput = input
+    end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+    if input == dragInput and dragging then
+        local delta = input.Position - dragStart
+        Button.Position = UDim2.new(
+            startPos.X.Scale, 
+            startPos.X.Offset + delta.X, 
+            startPos.Y.Scale, 
+            startPos.Y.Offset + delta.Y
+        )
+    end
+end)
