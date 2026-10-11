@@ -199,8 +199,13 @@ Button.Text = "sigmamagnettech v2"
 Button.TextSize = 18
 Button.Parent = ScreenGui
 
--- Xử lý riêng biệt phím RightShift để ẩn/hiện nút mượt mà nhất
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    -- ĐẶT Ở ĐÂY: Nếu đang gõ chat (TextBoxFocused), lập tức chặn mọi xử lý phím bên dưới
+    if UserInputService:GetFocusedTextBox() then
+        return
+    end
+
+    -- Xử lý ẩn/hiện GUI khi bấm RightShift ngoài lúc chat
     if input.KeyCode == Enum.KeyCode.RightShift then
         ScreenGui.Enabled = not ScreenGui.Enabled
         return
